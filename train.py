@@ -12,6 +12,9 @@ import torch.distributed as dist
 from torchvision import transforms, utils
 from tqdm import tqdm
 
+from timer import TimeAverager
+import time
+
 try:
     import wandb
 
@@ -158,6 +161,8 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
     sample_z = torch.randn(args.n_sample, args.latent, device=device)
 
+    batch_cost_averager = TimeAverager()
+    
     for idx in pbar:
         i = idx + args.start_iter
 
@@ -165,6 +170,8 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
             print("Done!")
 
             break
+
+        step_start_time = time.time()
 
         real_img = next(loader)
         real_img = real_img.to(device)
@@ -277,7 +284,17 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         fake_score_val = loss_reduced["fake_score"].mean().item()
         path_length_val = loss_reduced["path_length"].mean().item()
 
+        batch_cost_averager.record(time.time() - step_start_time,
+                                       num_samples=args.batch)
+
+        
         if get_rank() == 0:
+            message = ""
+            ips = batch_cost_averager.get_ips_average()
+            message += 'ips: %.5f images/s ' % ips
+            print(message)
+            batch_cost_averager.reset()
+            
             pbar.set_description(
                 (
                     f"d: {d_loss_val:.4f}; g: {g_loss_val:.4f}; r1: {r1_val:.4f}; "
@@ -522,6 +539,7 @@ if __name__ == "__main__":
         dataset,
         batch_size=args.batch,
         sampler=data_sampler(dataset, shuffle=True, distributed=args.distributed),
+        num_workers=3,
         drop_last=True,
     )
 
@@ -529,3 +547,4 @@ if __name__ == "__main__":
         wandb.init(project="stylegan 2")
 
     train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, device)
+
